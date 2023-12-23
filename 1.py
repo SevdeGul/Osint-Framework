@@ -10,6 +10,7 @@ import queue
 import dns.resolver
 import subprocess
 import os
+from emailfinder.extractor import *
 
 print(Style.BRIGHT + f"""{Fore.RED}
     Welcome to Attack Surface Discovery tool...
@@ -18,23 +19,63 @@ print(Style.BRIGHT + f"""{Fore.RED}
 #kullanıcıdan alınan domain bilgisinden ip discovery aşaması gerçekleştirilir.
 def ip_bulma(domain):
     ip = socket.gethostbyname(domain)
+    print("*" * 30)
     print(f"{Fore.BLUE}IP Address: \n{Style.RESET_ALL}" + ip)
     return ip 
 
-def dns_sorgusu(domain):
-    dosya = "wordlists.txt"
+# wordlist.txt'yi okuyarak orada yer alan kelimeler için subdomain dns brute force yapar
+def subdomain_enum_dns_brute(domain):
+    print(f"{Fore.BLUE}[i] DNS Brute force started.{Style.RESET_ALL}")
+    dosya = "wordlist_test.txt"
+    thread_count = 10  # İş parçacığı sayısı
+    # Her iş parçacığı için kullanılacak kilit (lock) 
+    result_lock = threading.Lock()
+    # İş parçacıkları için liste
+    threads = []
+    
+    # Her iş parçacığına eşit şekilde bölünmüş wordlist oluşturuyoruz
     with open(dosya, "r", encoding='utf-8') as dosya:
         wordlist = dosya.readlines()
-        for word in wordlist:
-            # A kaydı sorgusu (IPv4 adresleri için)
-            try: 
-                answers = dns.resolver.resolve(domain, 'A')
-                return True
-            except Exception:
-                continue
+
+    chunk_size = len(wordlist) // thread_count
+    for i in range(thread_count):
+        start = i * chunk_size
+        end = (i + 1) * chunk_size if i != thread_count - 1 else len(wordlist)
+        thread_wordlist = wordlist[start:end]
+
+        # Her iş parçacığı için bir Thread oluşturun
+        thread = threading.Thread(target=dns_sorgusu, args=(domain, thread_wordlist, result_lock))
+        threads.append(thread)
+    
+    print(f"{Fore.BLUE}[i] Threads generated. Starting.{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}[+] DNS Brute Force finished. Detected subdomains:{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}-{Style.RESET_ALL}" * 30)
+     # İş parçacıklarını başlatın
+    for thread in threads:
+        thread.start()
+
+    # İş parçacıklarının tamamlanmasını bekleyin
+    for thread in threads:
+        thread.join()
+    
+   
+
+
+#verilen domaine wordlistten string ekleyerek oluşan subdomain için DNS Sorgusu atar
+def dns_sorgusu(domain, wordlist, result_lock):
+    for word in wordlist:
+        word = word.strip()
+        try: 
+            subdomain = word + "." + domain
+            answers = dns.resolver.resolve(subdomain, 'A')
+            with result_lock:
+                print(subdomain)
+        except Exception:
+            continue
 
 #bulunan ip adresi ile subnet enumeration aşamasi yapilir.
 def subnet_enumeration(ip):
+    print(f"{Fore.BLUE}[i] Enumerating subnet...\n{Style.RESET_ALL}")
     bgp = "https://bgp.he.net/ip/"
     url = bgp + ip
     response = requests.get(url)
@@ -68,6 +109,7 @@ def subnet_enumeration(ip):
 
 #subdomain enumeration aşamasi
 def subdomain_enumeration(domain):
+    print(f"{Fore.BLUE}[i] Checking SSL Transparency logs for subdomain enumeration...{Style.RESET_ALL}")
     crt_sh = "https://crt.sh/?q=" +domain + "&output=json"
     subdomains = set()
     wildcardsubdomains = set()
@@ -93,7 +135,8 @@ def subdomain_enumeration(domain):
     subdomain = subdomains.union(wildcardsubdomains)
 
     liste = list(subdomain)
-    print(f"{Fore.BLUE}Subdomains: {Style.RESET_ALL}")
+    print(f"{Fore.GREEN}[+] SSL Transparency scanner finished. Detected subdomains:{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}-{Style.RESET_ALL}"*30)
     veri = {
         '' : liste,
     }
@@ -128,6 +171,7 @@ def scan(q, ip):
 
 #scan fonksiyonu kullanılarak multithreading aşaması yapılır.
 def port_scan(ip):
+    print(f"{Fore.BLUE}[i] Scanning ports...{Style.RESET_ALL}")
     http_q = queue.Queue()
     https_q = queue.Queue()
 
@@ -154,7 +198,7 @@ def port_scan(ip):
     for thread in threads:
         thread.join()
 
-    print(f"{Fore.BLUE}HTTP/HTTPS Enumeration: {Style.RESET_ALL}")
+    print(f"{Fore.GREEN}[+] Open HTTP/HTTPS Ports: {Style.RESET_ALL}")
     veri = {
         'HTTP Ports' : global_open_http_ports
     }
@@ -169,43 +213,49 @@ def port_scan(ip):
 
 
 
-#def mail_bulma(domain):
-    #command = f"theHarvester -d {domain} -l 500 -b all"  # Domain üzerinde theHarvester'ı çalıştırmak için komut
-    #process = subprocess.Popen(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    #output, error = process.communicate()
+def mail_bulma(domain):
+    print(f"{Fore.BLUE}[i] Scanning email addresses...{Style.RESET_ALL}")
+    emails1 = get_emails_from_google(domain)
+    emails2 = get_emails_from_bing(domain)
+    emails3 = get_emails_from_baidu(domain)
+    emails = emails1 + emails2 +  emails3
+    return emails
 
-    #if error:
-        #print(f"Hata: {error.decode()}")
-    #else:
-        #print(f"theHarvester çiktisi:\n{output.decode()}")
+def main():
+    print(f"{Fore.GREEN}Enter Domain: {Style.RESET_ALL}")
+    domain = input()
+    ip = ip_bulma(domain)
+    print("*" * 30)
+
+    #print(subnet_enumeration(ip))
+    print("*" * 30)
+
+    print(subdomain_enumeration(domain))
+    print("*" * 30)
+
+    http_ports, https_ports = port_scan(ip)
+    merged_ports = pd.concat([http_ports, https_ports], axis=1)
+    cleaned_df = merged_ports.replace([np.nan, -np.inf], "")
+    print(cleaned_df)
+    print("*" * 30)
+    emails = mail_bulma(domain)
+    print(f"{Fore.GREEN}[+] Detected email addresses:{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}-{Style.RESET_ALL}" * 30)
+    for email in emails:
+        print(email)
+    print("*" * 30)
+    subdomain_enum_dns_brute(domain)
+
 
 global_http_ports = [80, 81, 82,  554,  591, 4791, 5554,  5060,  5800, 5900, 6638,  8008,  8080, 8081, 8181, 8090, 8554]
 global_open_http_ports = []
 global_https_ports = [443, 8443]
 global_open_https_ports = []
 
-print(f"{Fore.GREEN}Enter Domain: {Style.RESET_ALL}")
-domain = input()
-print("*" * 30)
-print(dns_sorgusu(domain))
+if __name__ == "__main__":
+    main()
 
 
-"""
-ip = ip_bulma(domain)
-print("*" * 30)
-
-print(subnet_enumeration(ip))
-print("*" * 30)
-
-print(subdomain_enumeration(domain))
-print("*" * 30)
-
-http_ports, https_ports = port_scan(ip)
-merged_ports = pd.concat([http_ports, https_ports], axis=1)
-cleaned_df = merged_ports.replace([np.nan, -np.inf], "")
-print(cleaned_df)
-print("*" * 30)
-#mail_bulma(domain) """
 
 
 # dosyayı oku
@@ -217,3 +267,7 @@ print("*" * 30)
     # domain  var
 # else:
     # domain yok
+    
+    
+    
+    
