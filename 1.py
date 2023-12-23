@@ -7,6 +7,9 @@ import threading
 from bs4 import BeautifulSoup
 from colorama import Fore, Style
 import queue
+import dns.resolver
+import subprocess
+import os
 
 print(Style.BRIGHT + f"""{Fore.RED}
     Welcome to Attack Surface Discovery tool...
@@ -17,6 +20,18 @@ def ip_bulma(domain):
     ip = socket.gethostbyname(domain)
     print(f"{Fore.BLUE}IP Address: \n{Style.RESET_ALL}" + ip)
     return ip 
+
+def dns_sorgusu(domain):
+    dosya = "wordlists.txt"
+    with open(dosya, "r", encoding='utf-8') as dosya:
+        wordlist = dosya.readlines()
+        for word in wordlist:
+            # A kaydı sorgusu (IPv4 adresleri için)
+            try: 
+                answers = dns.resolver.resolve(domain, 'A')
+                return True
+            except Exception:
+                continue
 
 #bulunan ip adresi ile subnet enumeration aşamasi yapilir.
 def subnet_enumeration(ip):
@@ -86,6 +101,7 @@ def subdomain_enumeration(domain):
     tablo = pd.DataFrame(veri)
     return tablo
 
+
 #verilen ipleri q'dan bir port alarak tarar, açık olanları listeye ekler.
 def scan(q, ip):
     global global_http_ports
@@ -151,6 +167,18 @@ def port_scan(ip):
     tablo2 = pd.DataFrame(veri2)
     return tablo, tablo2
 
+
+
+#def mail_bulma(domain):
+    #command = f"theHarvester -d {domain} -l 500 -b all"  # Domain üzerinde theHarvester'ı çalıştırmak için komut
+    #process = subprocess.Popen(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    #output, error = process.communicate()
+
+    #if error:
+        #print(f"Hata: {error.decode()}")
+    #else:
+        #print(f"theHarvester çiktisi:\n{output.decode()}")
+
 global_http_ports = [80, 81, 82,  554,  591, 4791, 5554,  5060,  5800, 5900, 6638,  8008,  8080, 8081, 8181, 8090, 8554]
 global_open_http_ports = []
 global_https_ports = [443, 8443]
@@ -159,7 +187,10 @@ global_open_https_ports = []
 print(f"{Fore.GREEN}Enter Domain: {Style.RESET_ALL}")
 domain = input()
 print("*" * 30)
+print(dns_sorgusu(domain))
 
+
+"""
 ip = ip_bulma(domain)
 print("*" * 30)
 
@@ -174,4 +205,15 @@ merged_ports = pd.concat([http_ports, https_ports], axis=1)
 cleaned_df = merged_ports.replace([np.nan, -np.inf], "")
 print(cleaned_df)
 print("*" * 30)
+#mail_bulma(domain) """
 
+
+# dosyayı oku
+# dosyadaki elemanları bir  listede tut
+# o listedeki elemanları tek tek cagır 
+# cagırdıgın eleman için <eleman>.domain şeklinde string yap
+# o string için dns_sorgu(o_string) fonk. cagır
+# if dns_sorgu(o_string) == true:
+    # domain  var
+# else:
+    # domain yok
