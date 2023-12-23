@@ -163,3 +163,7 @@ harita
 agacisleri
 enerjisistemleri
 bilisimsistemleri
+buyoktur
+123123
+yokyokyok
+sevdegul

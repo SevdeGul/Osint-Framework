@@ -8,9 +8,11 @@ from bs4 import BeautifulSoup
 from colorama import Fore, Style
 import queue
 import dns.resolver
-import subprocess
-import os
+import asyncio
+import dns.asyncresolver
 from emailfinder.extractor import *
+import concurrent.futures
+import time
 
 print(Style.BRIGHT + f"""{Fore.RED}
     Welcome to Attack Surface Discovery tool...
@@ -24,58 +26,102 @@ def ip_bulma(domain):
     return ip 
 
 # wordlist.txt'yi okuyarak orada yer alan kelimeler için subdomain dns brute force yapar
-def subdomain_enum_dns_brute(domain):
+
+"""
+def dns_sorgusu(domain, wordlist, dns_server):
+    for word in wordlist:
+        word = word.strip()
+        try: 
+            subdomain = word + "." + domain
+            resolver = dns.resolver.Resolver(configure=False)
+            resolver.nameservers = [dns_server]
+            answer = resolver.resolve(subdomain, 'A')
+            print(subdomain)
+        except Exception:
+            continue
+
+def subdomain_enum_dns_brute(domain, dns_servers):
     print(f"{Fore.BLUE}[i] DNS Brute force started.{Style.RESET_ALL}")
-    dosya = "wordlist_test.txt"
-    thread_count = 10  # İş parçacığı sayısı
-    # Her iş parçacığı için kullanılacak kilit (lock) 
-    result_lock = threading.Lock()
-    # İş parçacıkları için liste
-    threads = []
+    dosya = "wordlists_shuffled.txt"
+    thread_count = 3 * len(dns_servers)  # Her DNS sunucusu için 3 iş parçacığı
+    threads = []  # İş parçacıkları için liste
     
     # Her iş parçacığına eşit şekilde bölünmüş wordlist oluşturuyoruz
     with open(dosya, "r", encoding='utf-8') as dosya:
         wordlist = dosya.readlines()
 
-    chunk_size = len(wordlist) // thread_count
-    for i in range(thread_count):
-        start = i * chunk_size
-        end = (i + 1) * chunk_size if i != thread_count - 1 else len(wordlist)
-        thread_wordlist = wordlist[start:end]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as executor:
+        for i, dns_server in enumerate(dns_servers):
+            start = i * len(wordlist) // thread_count
+            end = (i + 1) * len(wordlist) // thread_count
+            thread_wordlist = wordlist[start:end]
 
-        # Her iş parçacığı için bir Thread oluşturun
-        thread = threading.Thread(target=dns_sorgusu, args=(domain, thread_wordlist, result_lock))
-        threads.append(thread)
+            # Her iş parçacığı için bir Thread oluşturun
+            thread = executor.submit(dns_sorgusu, domain, thread_wordlist, dns_server)
+            threads.append(thread)
     
     print(f"{Fore.BLUE}[i] Threads generated. Starting.{Style.RESET_ALL}")
-    print(f"{Fore.GREEN}[+] DNS Brute Force finished. Detected subdomains:{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}[+] DNS Brute Force results:{Style.RESET_ALL}")
     print(f"{Fore.GREEN}-{Style.RESET_ALL}" * 30)
-     # İş parçacıklarını başlatın
-    for thread in threads:
-        thread.start()
-
     # İş parçacıklarının tamamlanmasını bekleyin
-    for thread in threads:
-        thread.join()
+    concurrent.futures.wait(threads)
+    print(f"{Fore.BLUE}[i] DNS Brute force completed.{Style.RESET_ALL}")
     
-   
+"""
 
-
-#verilen domaine wordlistten string ekleyerek oluşan subdomain için DNS Sorgusu atar
-def dns_sorgusu(domain, wordlist, result_lock):
+def dns_sorgusu(domain, wordlist, dns_server, global_dns_servers):
     for word in wordlist:
         word = word.strip()
         try: 
             subdomain = word + "." + domain
-            answers = dns.resolver.resolve(subdomain, 'A')
-            with result_lock:
-                print(subdomain)
+            resolver = dns.resolver.Resolver(configure=False)
+            resolver.nameservers = [dns_server]
+            answer = resolver.resolve(subdomain, 'A')
+            print(subdomain)
+
+            with dns_server_lock:
+                # Update usage count for the DNS server
+                global_dns_servers[dns_server] += 1
+
+                # If the count reaches 5, wait for 5 seconds and reset it to 0
+                if global_dns_servers[dns_server] == 5:
+                    print(f"{Fore.RED}[i] Waiting for 5 seconds. DNS server: {dns_server} {Style.RESET_ALL}")
+                    time.sleep(5)
+                    global_dns_servers[dns_server] = 0
+                    print(f"{Fore.YELLOW}[i] Thread lock finished! DNS server: {dns_server} {Style.RESET_ALL}")
         except Exception:
             continue
 
+def subdomain_enum_dns_brute(domain, global_dns_servers):
+    print(f"{Fore.BLUE}[i] DNS Brute force started.{Style.RESET_ALL}")
+    dosya = "wordlists_shuffled.txt"
+    thread_count = 3 * len(global_dns_servers)  # Her DNS sunucusu için 3 iş parçacığı
+    threads = []  # İş parçacıkları için liste
+    
+    # Her iş parçacığına eşit şekilde bölünmüş wordlist oluşturuyoruz
+    with open(dosya, "r", encoding='utf-8') as dosya:
+        wordlist = dosya.readlines()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as executor:
+        for i, dns_server in enumerate(global_dns_servers):
+            start = i * len(wordlist) // thread_count
+            end = (i + 1) * len(wordlist) // thread_count
+            thread_wordlist = wordlist[start:end]
+
+            # Her iş parçacığı için bir Thread oluşturun
+            thread = executor.submit(dns_sorgusu, domain, thread_wordlist, dns_server, global_dns_servers)
+            threads.append(thread)
+    
+    print(f"{Fore.BLUE}[i] Threads generated. Starting.{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}[+] DNS Brute Force results:{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}-{Style.RESET_ALL}" * 30)
+    # İş parçacıklarının tamamlanmasını bekleyin
+    concurrent.futures.wait(threads)
+    print(f"{Fore.BLUE}[i] DNS Brute force completed.{Style.RESET_ALL}")
+
 #bulunan ip adresi ile subnet enumeration aşamasi yapilir.
 def subnet_enumeration(ip):
-    print(f"{Fore.BLUE}[i] Enumerating subnet...\n{Style.RESET_ALL}")
+    print(f"{Fore.BLUE}[i] Enumerating subnet...{Style.RESET_ALL}")
     bgp = "https://bgp.he.net/ip/"
     url = bgp + ip
     response = requests.get(url)
@@ -97,7 +143,7 @@ def subnet_enumeration(ip):
         asns.append(asn.text)
         subnets.append(subnet.text)
         descriptions.append(description.text)
-    print(f"{Fore.BLUE}Subnets: {Style.RESET_ALL}")
+    print(f"{Fore.GREEN}Subnets: {Style.RESET_ALL}")
     veri = {
         'ASN No' : asns,
         'Subnets' : subnets,
@@ -227,7 +273,7 @@ def main():
     ip = ip_bulma(domain)
     print("*" * 30)
 
-    #print(subnet_enumeration(ip))
+    print(subnet_enumeration(ip))
     print("*" * 30)
 
     print(subdomain_enumeration(domain))
@@ -244,30 +290,23 @@ def main():
     for email in emails:
         print(email)
     print("*" * 30)
-    subdomain_enum_dns_brute(domain)
+    #asyncio.run(subdomain_enum_dns_brute_async(domain))
+    subdomain_enum_dns_brute(domain, global_dns_servers)
 
 
 global_http_ports = [80, 81, 82,  554,  591, 4791, 5554,  5060,  5800, 5900, 6638,  8008,  8080, 8081, 8181, 8090, 8554]
 global_open_http_ports = []
 global_https_ports = [443, 8443]
 global_open_https_ports = []
+global_dns_servers = {}
+dns_server_lock = threading.Lock()
 
 if __name__ == "__main__":
+    with open("dns_servers.txt", "r", encoding='utf-8') as dosya:
+        dnslist = dosya.readlines()
+    for dns_elem in dnslist:
+        clear_dns = dns_elem.strip()
+        # global_dns_servers = {'1.1.1.1':0, '2.2.2.2':0, '8.8.8.8':0 ...}
+        global_dns_servers[clear_dns] = 0
+        
     main()
-
-
-
-
-# dosyayı oku
-# dosyadaki elemanları bir  listede tut
-# o listedeki elemanları tek tek cagır 
-# cagırdıgın eleman için <eleman>.domain şeklinde string yap
-# o string için dns_sorgu(o_string) fonk. cagır
-# if dns_sorgu(o_string) == true:
-    # domain  var
-# else:
-    # domain yok
-    
-    
-    
-    
